@@ -12,7 +12,10 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route index element={<Navigate to="/payments" replace />} />
           <Route path="/payments" element={<Payments />} />
-          <Route path="/payments/generated" element={<PaymentGenerated />} />
+          <Route
+            path="/payments/generated/:id"
+            element={<PaymentGenerated />}
+          />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/sellers" element={<Sellers />} />
         </Route>

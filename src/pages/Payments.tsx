@@ -1,11 +1,20 @@
 import {
+  useEffect,
   useState,
   type FormEvent,
   type InputHTMLAttributes,
 } from "react";
 import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
 
 type PaymentMethod = "pix" | "boleto" | "credit_card";
+
+type SellerOption = {
+  id: string;
+  name: string;
+  document: string;
+  pagarme_recipient_id: string;
+};
 
 function onlyDigits(value: string) {
   return value.replace(/\D/g, "");
@@ -67,13 +76,9 @@ function isValidCPF(value: string) {
 
   let digit = (sum * 10) % 11;
 
-  if (digit === 10) {
-    digit = 0;
-  }
+  if (digit === 10) digit = 0;
 
-  if (digit !== Number(cpf[9])) {
-    return false;
-  }
+  if (digit !== Number(cpf[9])) return false;
 
   sum = 0;
 
@@ -83,9 +88,7 @@ function isValidCPF(value: string) {
 
   digit = (sum * 10) % 11;
 
-  if (digit === 10) {
-    digit = 0;
-  }
+  if (digit === 10) digit = 0;
 
   return digit === Number(cpf[10]);
 }
@@ -101,8 +104,7 @@ function isValidCNPJ(value: string) {
     const total = base
       .split("")
       .reduce(
-        (sum, digit, index) =>
-          sum + Number(digit) * weights[index],
+        (sum, digit, index) => sum + Number(digit) * weights[index],
         0
       );
 
@@ -122,23 +124,21 @@ function isValidCNPJ(value: string) {
   );
 
   return (
-    firstDigit === Number(cnpj[12]) &&
-    secondDigit === Number(cnpj[13])
+    firstDigit === Number(cnpj[12]) && secondDigit === Number(cnpj[13])
   );
 }
 
 function isValidDocument(value: string) {
   const digits = onlyDigits(value);
 
-  if (digits.length === 11) {
-    return isValidCPF(digits);
-  }
-
-  if (digits.length === 14) {
-    return isValidCNPJ(digits);
-  }
+  if (digits.length === 11) return isValidCPF(digits);
+  if (digits.length === 14) return isValidCNPJ(digits);
 
   return false;
+}
+
+function documentTypeOf(value: string): "cpf" | "cnpj" {
+  return onlyDigits(value).length === 14 ? "cnpj" : "cpf";
 }
 
 function getToday() {
@@ -154,6 +154,10 @@ function getToday() {
 export default function Payments() {
   const navigate = useNavigate();
 
+  const [sellers, setSellers] = useState<SellerOption[]>([]);
+  const [loadingSellers, setLoadingSellers] = useState(true);
+  const [sellerId, setSellerId] = useState("");
+
   const [methods, setMethods] = useState<PaymentMethod[]>([
     "pix",
     "boleto",
@@ -163,6 +167,27 @@ export default function Payments() {
   const [processNumber, setProcessNumber] = useState("");
   const [document, setDocument] = useState("");
   const [phone, setPhone] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    async function loadSellers() {
+      setLoadingSellers(true);
+
+      const { data, error } = await supabase
+        .from("sellers")
+        .select("id, name, document, pagarme_recipient_id")
+        .eq("active", true)
+        .order("name", { ascending: true });
+
+      if (!error) {
+        setSellers((data ?? []) as SellerOption[]);
+      }
+
+      setLoadingSellers(false);
+    }
+
+    loadSellers();
+  }, []);
 
   function toggleMethod(method: PaymentMethod) {
     setMethods((current) =>
@@ -172,39 +197,33 @@ export default function Payments() {
     );
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const form = new FormData(event.currentTarget);
 
-    const name = String(
-      form.get("customer_name") || ""
-    ).trim();
-
-    const email = String(
-      form.get("customer_email") || ""
-    ).trim();
-
+    const payerName = String(form.get("payer_name") || "").trim();
+    const payerEmail = String(form.get("payer_email") || "").trim();
     const amount = Number(form.get("amount"));
+    const dueDate = String(form.get("due_date") || "");
 
-    const dueDate = String(
-      form.get("due_date") || ""
-    );
-
-    if (!/^\d{2}\/\d{6}$/.test(processNumber)) {
-      alert(
-        "O Nº do Processo deve estar no formato 05/122039."
-      );
+    if (!sellerId) {
+      alert("Selecione o seller que vai receber esta cobrança.");
       return;
     }
 
-    if (!name) {
+    if (!/^\d{2}\/\d{6}$/.test(processNumber)) {
+      alert("O Nº do Processo deve estar no formato 05/122039.");
+      return;
+    }
+
+    if (!payerName) {
       alert("Informe o nome ou razão social do pagador.");
       return;
     }
 
     if (!isValidDocument(document)) {
-      alert("Informe um CPF ou CNPJ válido.");
+      alert("Informe um CPF ou CNPJ válido para o pagador.");
       return;
     }
 
@@ -219,10 +238,7 @@ export default function Payments() {
       return;
     }
 
-    if (
-      email &&
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    ) {
+    if (payerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payerEmail)) {
       alert("Informe um e-mail válido.");
       return;
     }
@@ -238,57 +254,54 @@ export default function Payments() {
     }
 
     if (dueDate < getToday()) {
-      alert(
-        "A data de vencimento não pode ser anterior à data atual."
-      );
+      alert("A data de vencimento não pode ser anterior à data atual.");
       return;
     }
 
     if (!methods.length) {
-      alert(
-        "Selecione pelo menos uma forma de pagamento."
-      );
+      alert("Selecione pelo menos uma forma de pagamento.");
       return;
     }
 
-    const payload = {
-      processNumber,
+    setSubmitting(true);
 
-      payer: {
-        name,
-        document: onlyDigits(document),
-        email,
-        phone: onlyDigits(phone),
-      },
+    const { data, error } = await supabase
+      .from("payments")
+      .insert({
+        seller_id: sellerId,
+        process_number: processNumber,
 
-      description: String(
-        form.get("description") || ""
-      ).trim(),
+        payer_name: payerName,
+        payer_document: onlyDigits(document),
+        payer_document_type: documentTypeOf(document),
+        payer_email: payerEmail || null,
+        payer_phone: phoneDigits || null,
 
-      amount,
+        description: String(form.get("description") || "").trim() || null,
+        amount_cents: Math.round(amount * 100),
+        due_date: dueDate,
+        observations:
+          String(form.get("observations") || "").trim() || null,
 
-      amountInCents: Math.round(amount * 100),
+        accepted_payment_methods: methods,
+      })
+      .select()
+      .single();
 
-      dueDate,
+    setSubmitting(false);
 
-      observations: String(
-        form.get("observations") || ""
-      ).trim(),
+    if (error) {
+      alert("Erro ao gerar a cobrança: " + error.message);
+      return;
+    }
 
-      acceptedPaymentMethods: methods,
-    };
-
-    console.log("Cobrança validada:", payload);
-
-    navigate("/payments/generated");
+    navigate(`/payments/generated/${data.id}`);
   }
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-slate-900">
-          Pagamentos
-        </h1>
+        <h1 className="text-2xl font-bold text-slate-900">Pagamentos</h1>
 
         <p className="mt-1 text-sm text-slate-500">
           Crie uma nova cobrança.
@@ -302,11 +315,55 @@ export default function Payments() {
       >
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-slate-900">
-            Nova cobrança
+            Recebedor / Seller
           </h2>
 
           <p className="text-sm text-slate-500">
-            Preencha os dados do pagador e da cobrança.
+            Quem vai receber esta cobrança.
+          </p>
+        </div>
+
+        <label className="mb-2 block text-sm font-medium text-slate-700">
+          Selecione o seller
+        </label>
+
+        <select
+          value={sellerId}
+          onChange={(event) => setSellerId(event.target.value)}
+          required
+          disabled={loadingSellers}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+        >
+          <option value="">
+            {loadingSellers
+              ? "Carregando sellers..."
+              : sellers.length === 0
+                ? "Nenhum seller ativo cadastrado"
+                : "Selecione..."}
+          </option>
+
+          {sellers.map((seller) => (
+            <option key={seller.id} value={seller.id}>
+              {seller.name} — {formatDocument(seller.document)} — {" "}
+              {seller.pagarme_recipient_id}
+            </option>
+          ))}
+        </select>
+
+        {!loadingSellers && sellers.length === 0 && (
+          <p className="mt-2 text-sm text-amber-600">
+            Nenhum seller ativo encontrado. Cadastre um seller antes de criar
+            uma cobrança.
+          </p>
+        )}
+
+        <div className="mt-8 mb-6 border-t border-slate-200 pt-6">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Dados do pagador
+          </h2>
+
+          <p className="text-sm text-slate-500">
+            Quem vai efetuar o pagamento desta cobrança.
           </p>
         </div>
 
@@ -320,9 +377,7 @@ export default function Payments() {
               name="process_number"
               value={processNumber}
               onChange={(event) =>
-                setProcessNumber(
-                  formatProcess(event.target.value)
-                )
+                setProcessNumber(formatProcess(event.target.value))
               }
               type="text"
               inputMode="numeric"
@@ -338,7 +393,7 @@ export default function Payments() {
           </label>
 
           <Input
-            name="customer_name"
+            name="payer_name"
             label="Nome / Razão Social do pagador"
             placeholder="Nome completo ou razão social"
             required
@@ -350,12 +405,10 @@ export default function Payments() {
             </span>
 
             <input
-              name="customer_document"
+              name="payer_document"
               value={document}
               onChange={(event) =>
-                setDocument(
-                  formatDocument(event.target.value)
-                )
+                setDocument(formatDocument(event.target.value))
               }
               inputMode="numeric"
               maxLength={18}
@@ -366,7 +419,7 @@ export default function Payments() {
           </label>
 
           <Input
-            name="customer_email"
+            name="payer_email"
             label="E-mail"
             type="email"
             placeholder="cliente@email.com"
@@ -378,13 +431,9 @@ export default function Payments() {
             </span>
 
             <input
-              name="customer_phone"
+              name="payer_phone"
               value={phone}
-              onChange={(event) =>
-                setPhone(
-                  formatPhone(event.target.value)
-                )
-              }
+              onChange={(event) => setPhone(formatPhone(event.target.value))}
               type="tel"
               inputMode="tel"
               maxLength={15}
@@ -456,12 +505,8 @@ export default function Payments() {
 
             <MethodCheckbox
               label="Cartão de crédito"
-              checked={methods.includes(
-                "credit_card"
-              )}
-              onChange={() =>
-                toggleMethod("credit_card")
-              }
+              checked={methods.includes("credit_card")}
+              onChange={() => toggleMethod("credit_card")}
             />
           </div>
         </div>
@@ -469,9 +514,10 @@ export default function Payments() {
         <div className="mt-8 flex justify-end">
           <button
             type="submit"
-            className="rounded-lg bg-violet-600 px-6 py-3 font-semibold text-white transition hover:bg-violet-700"
+            disabled={submitting}
+            className="rounded-lg bg-violet-600 px-6 py-3 font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
           >
-            Gerar pagamento
+            {submitting ? "Gerando..." : "Gerar pagamento"}
           </button>
         </div>
       </form>
@@ -517,9 +563,7 @@ function MethodCheckbox({
         className="h-4 w-4"
       />
 
-      <span className="text-sm font-medium text-slate-700">
-        {label}
-      </span>
+      <span className="text-sm font-medium text-slate-700">{label}</span>
     </label>
   );
 }
