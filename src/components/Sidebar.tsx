@@ -13,7 +13,7 @@ const menu = [
     icon: ReceiptText,
   },
   {
-    label: "Clientes / Sellers",
+    label: "Sellers",
     path: "/sellers",
     icon: Users,
   },

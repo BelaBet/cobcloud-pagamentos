@@ -160,6 +160,24 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+function parseBRLAmount(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return NaN;
+  }
+
+  // Se tem vírgula, ela é o separador decimal: remove pontos (milhar) e
+  // troca a vírgula por ponto. Ex: "1.500,50" -> "1500.50"
+  if (trimmed.includes(",")) {
+    return Number(trimmed.replace(/\./g, "").replace(",", "."));
+  }
+
+  // Sem vírgula: assume que já está em formato numérico simples (ponto
+  // como decimal, ou número inteiro).
+  return Number(trimmed);
+}
+
 function formatCurrency(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
@@ -232,7 +250,7 @@ export default function Payments() {
   }, []);
 
   const feePreview = useMemo(() => {
-    const baseValue = Number(amountInput.replace(",", "."));
+    const baseValue = parseBRLAmount(amountInput);
 
     if (!Number.isFinite(baseValue) || baseValue <= 0) {
       return null;
@@ -261,7 +279,7 @@ export default function Payments() {
 
     const payerName = String(form.get("payer_name") || "").trim();
     const payerEmail = String(form.get("payer_email") || "").trim();
-    const amount = Number(amountInput.replace(",", "."));
+    const amount = parseBRLAmount(amountInput);
     const dueDate = String(form.get("due_date") || "");
 
     if (!sellerId) {
