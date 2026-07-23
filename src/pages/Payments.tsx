@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useState,
   type FormEvent,
   type InputHTMLAttributes,
@@ -14,6 +15,14 @@ type SellerOption = {
   name: string;
   document: string;
   pagarme_recipient_id: string;
+};
+
+type FeeRule = {
+  payment_method: PaymentMethod;
+  acquirer_cost_type: "fixed" | "percentage";
+  acquirer_cost_value: number;
+  platform_margin_type: "fixed" | "percentage";
+  platform_margin_value: number;
 };
 
 function onlyDigits(value: string) {
@@ -151,6 +160,27 @@ function getToday() {
   return `${year}-${month}-${day}`;
 }
 
+function formatCurrency(cents: number) {
+  return (cents / 100).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function computeChargedCents(baseCents: number, rule: FeeRule) {
+  const acquirerCents =
+    rule.acquirer_cost_type === "fixed"
+      ? Math.round(rule.acquirer_cost_value)
+      : Math.round(baseCents * Number(rule.acquirer_cost_value));
+
+  const marginCents =
+    rule.platform_margin_type === "fixed"
+      ? Math.round(rule.platform_margin_value)
+      : Math.round(baseCents * Number(rule.platform_margin_value));
+
+  return baseCents + acquirerCents + marginCents;
+}
+
 export default function Payments() {
   const navigate = useNavigate();
 
@@ -158,15 +188,13 @@ export default function Payments() {
   const [loadingSellers, setLoadingSellers] = useState(true);
   const [sellerId, setSellerId] = useState("");
 
-  const [methods, setMethods] = useState<PaymentMethod[]>([
-    "pix",
-    "boleto",
-    "credit_card",
-  ]);
+  const [feeRules, setFeeRules] = useState<FeeRule[]>([]);
+  const [method, setMethod] = useState<PaymentMethod>("pix");
 
   const [processNumber, setProcessNumber] = useState("");
   const [document, setDocument] = useState("");
   const [phone, setPhone] = useState("");
+  const [amountInput, setAmountInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -186,16 +214,45 @@ export default function Payments() {
       setLoadingSellers(false);
     }
 
+    async function loadFeeRules() {
+      const { data, error } = await supabase
+        .from("fee_rules")
+        .select(
+          "payment_method, acquirer_cost_type, acquirer_cost_value, platform_margin_type, platform_margin_value"
+        )
+        .eq("active", true);
+
+      if (!error) {
+        setFeeRules((data ?? []) as FeeRule[]);
+      }
+    }
+
     loadSellers();
+    loadFeeRules();
   }, []);
 
-  function toggleMethod(method: PaymentMethod) {
-    setMethods((current) =>
-      current.includes(method)
-        ? current.filter((item) => item !== method)
-        : [...current, method]
-    );
-  }
+  const feePreview = useMemo(() => {
+    const baseValue = Number(amountInput.replace(",", "."));
+
+    if (!Number.isFinite(baseValue) || baseValue <= 0) {
+      return null;
+    }
+
+    const baseCents = Math.round(baseValue * 100);
+    const rule = feeRules.find((item) => item.payment_method === method);
+
+    if (!rule) {
+      return null;
+    }
+
+    const chargedCents = computeChargedCents(baseCents, rule);
+
+    return {
+      baseCents,
+      chargedCents,
+      extraCents: chargedCents - baseCents,
+    };
+  }, [amountInput, method, feeRules]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -204,7 +261,7 @@ export default function Payments() {
 
     const payerName = String(form.get("payer_name") || "").trim();
     const payerEmail = String(form.get("payer_email") || "").trim();
-    const amount = Number(form.get("amount"));
+    const amount = Number(amountInput.replace(",", "."));
     const dueDate = String(form.get("due_date") || "");
 
     if (!sellerId) {
@@ -258,11 +315,6 @@ export default function Payments() {
       return;
     }
 
-    if (!methods.length) {
-      alert("Selecione pelo menos uma forma de pagamento.");
-      return;
-    }
-
     setSubmitting(true);
 
     const { data, error } = await supabase
@@ -283,16 +335,30 @@ export default function Payments() {
         observations:
           String(form.get("observations") || "").trim() || null,
 
-        accepted_payment_methods: methods,
+        payment_method: method,
       })
       .select()
       .single();
 
-    setSubmitting(false);
-
     if (error) {
+      setSubmitting(false);
       alert("Erro ao gerar a cobrança: " + error.message);
       return;
+    }
+
+    const { error: fnError } = await supabase.functions.invoke(
+      "generate-pagarme-charge",
+      { body: { payment_id: data.id } }
+    );
+
+    setSubmitting(false);
+
+    if (fnError) {
+      alert(
+        "A cobrança foi salva, mas houve um erro ao gerar no Pagar.me: " +
+          fnError.message +
+          "\n\nVocê pode conferir os detalhes na tela seguinte."
+      );
     }
 
     navigate(`/payments/generated/${data.id}`);
@@ -448,15 +514,22 @@ export default function Payments() {
             placeholder="Descrição da cobrança"
           />
 
-          <Input
-            name="amount"
-            label="Valor"
-            type="number"
-            step="0.01"
-            min="0.01"
-            placeholder="0,00"
-            required
-          />
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-slate-700">
+              Valor (o que o seller vai receber)
+            </span>
+
+            <input
+              name="amount"
+              value={amountInput}
+              onChange={(event) => setAmountInput(event.target.value)}
+              type="text"
+              inputMode="decimal"
+              placeholder="0,00"
+              required
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+            />
+          </label>
 
           <Input
             name="due_date"
@@ -483,32 +556,56 @@ export default function Payments() {
 
         <div className="mt-8 border-t border-slate-200 pt-6">
           <h2 className="font-semibold text-slate-900">
-            Formas disponíveis no link
+            Forma de pagamento
           </h2>
 
           <p className="mb-4 mt-1 text-sm text-slate-500">
-            Selecione as formas de pagamento disponíveis.
+            O pagador só verá o método escolhido aqui. Cartão parcelado ainda
+            não é suportado — só à vista.
           </p>
 
           <div className="flex flex-wrap gap-3">
-            <MethodCheckbox
+            <MethodRadio
               label="PIX"
-              checked={methods.includes("pix")}
-              onChange={() => toggleMethod("pix")}
+              checked={method === "pix"}
+              onChange={() => setMethod("pix")}
             />
 
-            <MethodCheckbox
+            <MethodRadio
               label="Boleto"
-              checked={methods.includes("boleto")}
-              onChange={() => toggleMethod("boleto")}
+              checked={method === "boleto"}
+              onChange={() => setMethod("boleto")}
             />
 
-            <MethodCheckbox
-              label="Cartão de crédito"
-              checked={methods.includes("credit_card")}
-              onChange={() => toggleMethod("credit_card")}
+            <MethodRadio
+              label="Cartão de crédito (à vista)"
+              checked={method === "credit_card"}
+              onChange={() => setMethod("credit_card")}
             />
           </div>
+
+          {feePreview && (
+            <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-4 text-sm">
+              <div className="flex justify-between text-slate-700">
+                <span>Seller recebe</span>
+                <span className="font-medium">
+                  {formatCurrency(feePreview.baseCents)}
+                </span>
+              </div>
+
+              <div className="flex justify-between text-slate-700">
+                <span>Custo + margem (repassado ao pagador)</span>
+                <span className="font-medium">
+                  {formatCurrency(feePreview.extraCents)}
+                </span>
+              </div>
+
+              <div className="mt-2 flex justify-between border-t border-violet-200 pt-2 font-semibold text-violet-900">
+                <span>Pagador paga</span>
+                <span>{formatCurrency(feePreview.chargedCents)}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-8 flex justify-end">
@@ -545,7 +642,7 @@ function Input({
   );
 }
 
-function MethodCheckbox({
+function MethodRadio({
   label,
   checked,
   onChange,
@@ -557,7 +654,8 @@ function MethodCheckbox({
   return (
     <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-300 px-4 py-3 transition hover:bg-slate-50">
       <input
-        type="checkbox"
+        type="radio"
+        name="payment_method_radio"
         checked={checked}
         onChange={onChange}
         className="h-4 w-4"
