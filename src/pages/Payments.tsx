@@ -372,9 +372,24 @@ export default function Payments() {
     setSubmitting(false);
 
     if (fnError) {
+      let detail = fnError.message;
+
+      // supabase-js só dá uma mensagem genérica em fnError.message;
+      // o motivo real vem no corpo da resposta HTTP.
+      const context = (fnError as { context?: Response }).context;
+
+      if (context) {
+        try {
+          const body = await context.clone().json();
+          detail = body?.error || detail;
+        } catch {
+          // corpo não era JSON, mantém a mensagem genérica
+        }
+      }
+
       alert(
-        "A cobrança foi salva, mas houve um erro ao gerar no Pagar.me: " +
-          fnError.message +
+        "A cobrança foi salva, mas houve um erro ao gerar no Pagar.me:\n\n" +
+          detail +
           "\n\nVocê pode conferir os detalhes na tela seguinte."
       );
     }
