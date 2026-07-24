@@ -1,25 +1,46 @@
-import { CreditCard, ReceiptText, Users } from "lucide-react";
+import { CreditCard, ReceiptText, Users, UserCog } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import { useAuth, type Role } from "../lib/auth";
 
-const menu = [
+const menu: {
+  label: string;
+  path: string;
+  icon: typeof CreditCard;
+  roles: Role[];
+}[] = [
   {
     label: "Pagamentos",
     path: "/payments",
     icon: CreditCard,
+    roles: ["admin", "operador"],
   },
   {
     label: "Transações",
     path: "/transactions",
     icon: ReceiptText,
+    roles: ["admin", "credor"],
   },
   {
     label: "Sellers",
     path: "/sellers",
     icon: Users,
+    roles: ["admin"],
+  },
+  {
+    label: "Usuários",
+    path: "/users",
+    icon: UserCog,
+    roles: ["admin"],
   },
 ];
 
 export function Sidebar() {
+  const { profile } = useAuth();
+
+  const visibleMenu = menu.filter(
+    (item) => profile && item.roles.includes(profile.role)
+  );
+
   return (
     <aside className="min-h-screen w-64 border-r border-slate-200 bg-white p-5">
       <div className="mb-10">
@@ -28,7 +49,7 @@ export function Sidebar() {
       </div>
 
       <nav className="space-y-2">
-        {menu.map(({ label, path, icon: Icon }) => (
+        {visibleMenu.map(({ label, path, icon: Icon }) => (
           <NavLink
             key={path}
             to={path}
