@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { CheckCircle2, Clock, Copy, ExternalLink } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
@@ -305,19 +305,19 @@ export default function PaymentGenerated() {
         )}
 
         <div className="flex justify-between">
-          <a
-            href="/payments"
+          <Link
+            to="/payments"
             className="rounded-lg border border-slate-300 px-4 py-2 font-medium text-slate-700 hover:bg-slate-50"
           >
             Voltar para pagamentos
-          </a>
+          </Link>
 
-          <a
-            href="/transactions"
+          <Link
+            to="/transactions"
             className="rounded-lg bg-violet-600 px-4 py-2 font-medium text-white hover:bg-violet-700"
           >
             Ver transações
-          </a>
+          </Link>
         </div>
       </div>
     </div>
