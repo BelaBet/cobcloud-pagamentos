@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Download,
+  Search,
+  Wallet,
+} from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 
@@ -18,6 +25,18 @@ type Transaction = {
     observations: string | null;
     seller: { name: string } | null;
   } | null;
+};
+
+type PaymentSummary = {
+  id: string;
+  amount_cents: number;
+  charged_amount_cents: number | null;
+  status: string;
+  due_date: string;
+  payment_method: "pix" | "boleto" | "credit_card" | null;
+  payer_name: string;
+  process_number: string;
+  created_at: string;
 };
 
 const methodLabels: Record<string, string> = {
@@ -60,8 +79,19 @@ function formatDate(isoDate: string | undefined) {
   return `${day}/${month}/${year}`;
 }
 
+function getToday() {
+  const now = new Date();
+
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 export default function Transactions() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [payments, setPayments] = useState<PaymentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -91,8 +121,21 @@ export default function Transactions() {
     setLoading(false);
   }
 
+  async function loadPayments() {
+    const { data, error } = await supabase
+      .from("payments")
+      .select(
+        "id, amount_cents, charged_amount_cents, status, due_date, payment_method, payer_name, process_number, created_at"
+      );
+
+    if (!error) {
+      setPayments((data ?? []) as PaymentSummary[]);
+    }
+  }
+
   useEffect(() => {
     loadTransactions();
+    loadPayments();
   }, []);
 
   const filteredTransactions = useMemo(() => {
@@ -129,6 +172,75 @@ export default function Transactions() {
       );
     });
   }, [transactions, dateFrom, dueDate, paymentMethod, payerSearch, processSearch]);
+
+  // Cobrancas filtradas com os MESMOS criterios da tabela de transacoes,
+  // usadas so pra calcular os cards de indicadores (precisam incluir
+  // cobrancas ainda nao pagas, que nunca viram uma "transaction").
+  const filteredPayments = useMemo(() => {
+    return payments.filter((payment) => {
+      const matchesDateFrom =
+        !dateFrom || payment.created_at.slice(0, 10) >= dateFrom;
+
+      const matchesDueDate = !dueDate || payment.due_date === dueDate;
+
+      const matchesMethod =
+        !paymentMethod || payment.payment_method === paymentMethod;
+
+      const matchesPayer =
+        !payerSearch ||
+        payment.payer_name.toLowerCase().includes(payerSearch.toLowerCase());
+
+      const matchesProcess =
+        !processSearch ||
+        payment.process_number
+          .toLowerCase()
+          .includes(processSearch.toLowerCase());
+
+      return (
+        matchesDateFrom &&
+        matchesDueDate &&
+        matchesMethod &&
+        matchesPayer &&
+        matchesProcess
+      );
+    });
+  }, [payments, dateFrom, dueDate, paymentMethod, payerSearch, processSearch]);
+
+  const cardTotals = useMemo(() => {
+    const today = getToday();
+
+    let totalCobrancas = 0;
+    let totalRecebido = 0;
+    let aReceber = 0;
+    let vencido = 0;
+
+    for (const payment of filteredPayments) {
+      // Usa o valor cobrado do pagador quando ja foi gerado no Pagar.me;
+      // antes disso, usa o valor base como melhor estimativa disponivel.
+      const value = payment.charged_amount_cents ?? payment.amount_cents;
+
+      // Total de cobrancas: soma bruta de tudo que foi gerado no filtro,
+      // independente do status.
+      totalCobrancas += value;
+
+      // As tres categorias abaixo sao mutuamente exclusivas: uma cobranca
+      // so pode estar em uma delas por vez.
+      if (payment.status === "paid") {
+        totalRecebido += value;
+      } else if (payment.status === "pending") {
+        if (payment.due_date < today) {
+          vencido += value;
+        } else {
+          aReceber += value;
+        }
+      }
+      // canceled, failed, refunded e expired nao entram em nenhuma das
+      // tres categorias (nem recebido, nem a receber, nem vencido), mas
+      // continuam contando no total bruto acima.
+    }
+
+    return { totalCobrancas, totalRecebido, aReceber, vencido };
+  }, [filteredPayments]);
 
   function exportXLSX() {
     const rows = filteredTransactions.map((transaction) => ({
@@ -190,6 +302,36 @@ export default function Transactions() {
           Exportar XLSX
         </button>
       </div>
+
+      <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <SummaryCard
+          label="Total de Cobranças"
+          value={formatCurrency(cardTotals.totalCobrancas)}
+          icon={Wallet}
+          accentClassName="bg-violet-50 text-violet-600"
+        />
+
+        <SummaryCard
+          label="Total Recebido"
+          value={formatCurrency(cardTotals.totalRecebido)}
+          icon={CheckCircle2}
+          accentClassName="bg-green-50 text-green-600"
+        />
+
+        <SummaryCard
+          label="A Receber"
+          value={formatCurrency(cardTotals.aReceber)}
+          icon={Clock}
+          accentClassName="bg-amber-50 text-amber-600"
+        />
+
+        <SummaryCard
+          label="Vencido"
+          value={formatCurrency(cardTotals.vencido)}
+          icon={AlertTriangle}
+          accentClassName="bg-red-50 text-red-600"
+        />
+      </section>
 
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -379,5 +521,40 @@ function TableHeader({ children }: { children: React.ReactNode }) {
 function TableCell({ children }: { children: React.ReactNode }) {
   return (
     <td className="whitespace-nowrap px-4 py-4 text-slate-700">{children}</td>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  icon: Icon,
+  accentClassName,
+}: {
+  label: string;
+  value: string;
+  icon: typeof Wallet;
+  accentClassName: string;
+}) {
+  return (
+    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div
+        className={
+          "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg " +
+          accentClassName
+        }
+      >
+        <Icon size={20} />
+      </div>
+
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium uppercase tracking-wide text-slate-500">
+          {label}
+        </p>
+
+        <p className="mt-0.5 truncate text-lg font-bold text-slate-900">
+          {value}
+        </p>
+      </div>
+    </div>
   );
 }
