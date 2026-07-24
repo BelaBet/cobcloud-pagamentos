@@ -1,6 +1,8 @@
 import { CreditCard, ReceiptText, Users, UserCog } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useAuth, type Role } from "../lib/auth";
+import ticketConnectLogo from "../assets/ticketconnect-logo.jpeg";
+import lpGrupoLogo from "../assets/lp-grupo-logo.jpeg";
 
 const menu: {
   label: string;
@@ -42,31 +44,45 @@ export function Sidebar() {
   );
 
   return (
-    <aside className="min-h-screen w-64 border-r border-slate-200 bg-white p-5">
-      <div className="mb-10">
-        <h1 className="text-xl font-bold text-violet-700">CobCloud</h1>
-        <p className="text-xs text-slate-500">Gestão de pagamentos</p>
+    <aside className="flex min-h-screen w-64 flex-col justify-between border-r border-slate-200 bg-white p-5">
+      <div>
+        <div className="mb-10">
+          <img
+            src={ticketConnectLogo}
+            alt="TicketConnect"
+            className="h-9 w-auto object-contain"
+          />
+          <p className="mt-1 text-xs text-slate-500">Gestão de pagamentos</p>
+        </div>
+
+        <nav className="space-y-2">
+          {visibleMenu.map(({ label, path, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={path}
+              className={({ isActive }) =>
+                [
+                  "flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition",
+                  isActive
+                    ? "bg-violet-50 text-violet-700"
+                    : "text-slate-600 hover:bg-slate-50",
+                ].join(" ")
+              }
+            >
+              <Icon size={18} />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
       </div>
 
-      <nav className="space-y-2">
-        {visibleMenu.map(({ label, path, icon: Icon }) => (
-          <NavLink
-            key={path}
-            to={path}
-            className={({ isActive }) =>
-              [
-                "flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition",
-                isActive
-                  ? "bg-violet-50 text-violet-700"
-                  : "text-slate-600 hover:bg-slate-50",
-              ].join(" ")
-            }
-          >
-            <Icon size={18} />
-            {label}
-          </NavLink>
-        ))}
-      </nav>
+      <div className="flex items-center gap-2 border-t border-slate-100 pt-4">
+        <img
+          src={lpGrupoLogo}
+          alt="LP Grupo"
+          className="h-7 w-auto object-contain opacity-80"
+        />
+      </div>
     </aside>
   );
 }
