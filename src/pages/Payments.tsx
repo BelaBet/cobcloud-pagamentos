@@ -495,6 +495,7 @@ export default function Payments() {
             name="payer_name"
             label="Nome / Razão Social do pagador"
             placeholder="Nome completo ou razão social"
+            maxLength={64}
             required
           />
 
